@@ -104,11 +104,24 @@ check_frpc_installed() {
 
 # 检查 frpc 运行状态
 check_frpc_status() {
-    if pgrep -x "frpc" > /dev/null 2>&1; then
-        return 0
-    else
-        return 1
+    # 兼容不同系统的检测方式
+    if command -v pgrep > /dev/null 2>&1; then
+        # 尝试使用 pgrep
+        if pgrep -f "frpc" > /dev/null 2>&1; then
+            return 0
+        fi
     fi
+    # 备用方案：使用 ps + grep
+    if ps | grep -v grep | grep -q "frpc"; then
+        return 0
+    fi
+    # 再次备用：检查 pidof
+    if command -v pidof > /dev/null 2>&1; then
+        if pidof frpc > /dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
 }
 
 # 获取 frpc 版本
@@ -750,55 +763,65 @@ delete_proxy() {
     
     # 创建临时文件
     local tmp_file="/tmp/frpc_config_tmp"
-    local in_target=0
-    local skip_until_next=0
+    rm -f "$tmp_file"
     
-    while IFS= read -r line; do
-        if echo "$line" | grep -q "^\[\[proxies\]\]"; then
-            if [ $skip_until_next -eq 1 ]; then
-                skip_until_next=0
-            fi
-            in_target=0
-        fi
-        
-        if echo "$line" | grep -q "name = \"${proxy_name}\""; then
-            in_target=1
-            skip_until_next=1
-            continue
-        fi
-        
-        if [ $skip_until_next -eq 1 ]; then
-            if echo "$line" | grep -q "^\[\[proxies\]\]"; then
-                skip_until_next=0
-                echo "$line" >> "$tmp_file"
-            fi
-        elif [ $in_target -eq 0 ]; then
-            echo "$line" >> "$tmp_file"
-        fi
-    done < "$FRPC_CONFIG"
-    
-    # 使用 awk 更可靠地删除
+    # 使用 awk 删除指定代理块
     awk -v name="$proxy_name" '
-    BEGIN { skip = 0 }
-    /^\[\[proxies\]\]/ { 
-        if (skip) skip = 0
-        block = $0
-        next_is_name = 1
-        getline
-        if ($0 ~ "name = \"" name "\"") {
-            skip = 1
+    BEGIN { skip = 0; in_proxies = 0 }
+    /^\[\[proxies\]\]/ {
+        if (skip == 1) {
+            skip = 0
+        }
+        in_proxies = 1
+        proxy_block = $0 "\n"
+        next
+    }
+    in_proxies == 1 {
+        if (/^name = /) {
+            # 检查是否是要删除的代理
+            if (index($0, "\"" name "\"") > 0) {
+                skip = 1
+                in_proxies = 0
+                next
+            } else {
+                printf "%s", proxy_block
+                print
+                in_proxies = 0
+                next
+            }
         } else {
-            print block
-            print
+            proxy_block = proxy_block $0 "\n"
+            next
+        }
+    }
+    skip == 1 {
+        # 跳过当前代理块的所有行，直到遇到下一个块或文件结束
+        if (/^\[/ || /^$/) {
+            if (/^\[\[proxies\]\]/) {
+                in_proxies = 1
+                proxy_block = $0 "\n"
+                skip = 0
+            } else if (/^\[/) {
+                skip = 0
+                print
+            }
+            # 空行在删除块内也跳过
         }
         next
     }
-    !skip { print }
+    { print }
     ' "$FRPC_CONFIG" > "$tmp_file"
     
-    mv "$tmp_file" "$FRPC_CONFIG"
+    # 验证临时文件
+    if [ -s "$tmp_file" ]; then
+        mv "$tmp_file" "$FRPC_CONFIG"
+        print_success "代理 [${proxy_name}] 已删除!"
+    else
+        print_error "删除失败，配置文件可能已损坏"
+        rm -f "$tmp_file"
+        return
+    fi
     
-    print_success "代理 [${proxy_name}] 已删除!"
     prompt_reload
 }
 
@@ -831,15 +854,41 @@ start_frpc() {
     fi
     
     print_info "正在启动 FRPC..."
-    $FRPC_SERVICE start
     
-    sleep 2
-    
-    if check_frpc_status; then
-        print_success "FRPC 启动成功!"
+    # 尝试使用服务脚本启动
+    if [ -f "$FRPC_SERVICE" ]; then
+        $FRPC_SERVICE start 2>/dev/null
     else
-        print_error "FRPC 启动失败，请检查日志"
+        # 直接启动
+        nohup $FRPC_BIN -c "$FRPC_CONFIG" >> "$FRPC_LOG" 2>&1 &
     fi
+    
+    # 等待启动并检查多次
+    local retry=0
+    while [ $retry -lt 5 ]; do
+        sleep 1
+        if check_frpc_status; then
+            print_success "FRPC 启动成功!"
+            # 额外检查日志确认连接成功
+            if [ -f "$FRPC_LOG" ]; then
+                if tail -5 "$FRPC_LOG" 2>/dev/null | grep -q "login to server success"; then
+                    print_info "已成功连接到 FRPS 服务器"
+                fi
+            fi
+            return 0
+        fi
+        retry=$((retry + 1))
+    done
+    
+    # 最后再检查一次日志
+    if [ -f "$FRPC_LOG" ] && tail -10 "$FRPC_LOG" 2>/dev/null | grep -q "login to server success"; then
+        print_success "FRPC 启动成功!"
+        print_info "已成功连接到 FRPS 服务器"
+        return 0
+    fi
+    
+    print_error "FRPC 启动失败，请检查日志"
+    print_info "使用菜单选项 15 查看详细日志"
 }
 
 # 停止 frpc
