@@ -120,25 +120,26 @@ check_frpc_installed() {
     fi
 }
 
-# 检查 frpc 运行状态
+# 检查 frpc 运行状态（只检测 frpc 客户端，排除管理脚本）
 check_frpc_status() {
-    # 兼容不同系统的检测方式
-    if command -v pgrep > /dev/null 2>&1; then
-        # 尝试使用 pgrep
-        if pgrep -f "frpc" > /dev/null 2>&1; then
-            return 0
-        fi
-    fi
-    # 备用方案：使用 ps + grep
-    if ps | grep -v grep | grep -q "frpc"; then
-        return 0
-    fi
-    # 再次备用：检查 pidof
+    # 使用 pidof 精确匹配（最可靠）
     if command -v pidof > /dev/null 2>&1; then
         if pidof frpc > /dev/null 2>&1; then
             return 0
         fi
     fi
+    
+    # 备用方案：使用 ps 精确匹配
+    # 匹配 /usr/bin/frpc 或独立的 frpc 进程，排除 frpc-manager 和 frpcm
+    if ps w 2>/dev/null | grep -E "([/ ]frpc( |$)|^[0-9]+ +[^ ]+ +frpc$)" | grep -v "frpc-manager\|frpcm\|grep" | grep -q "frpc"; then
+        return 0
+    fi
+    
+    # 再备用
+    if ps | grep "frpc" | grep -v "frpc-manager\|frpcm\|grep" | grep -qE "[ /]frpc( |$)"; then
+        return 0
+    fi
+    
     return 1
 }
 
@@ -1001,6 +1002,9 @@ stop_frpc() {
     
     print_info "正在停止 FRPC..."
     
+    # 获取当前脚本的 PID，避免误杀
+    local self_pid=$$
+    
     # 方法1: 使用服务脚本停止
     if [ -f "$FRPC_SERVICE" ]; then
         $FRPC_SERVICE stop 2>/dev/null
@@ -1009,33 +1013,27 @@ stop_frpc() {
     # 等待一下
     sleep 1
     
-    # 方法2: 使用 killall
+    # 方法2: 使用 killall（只杀 frpc，不杀 frpc-manager）
     if check_frpc_status; then
-        killall frpc 2>/dev/null
+        killall -9 frpc 2>/dev/null
         sleep 1
     fi
     
-    # 方法3: 使用 pkill
+    # 方法3: 精确匹配 frpc 进程（排除 frpc-manager、frpcm 和脚本自身）
     if check_frpc_status; then
-        if command -v pkill > /dev/null 2>&1; then
-            pkill -f "frpc" 2>/dev/null
-            sleep 1
-        fi
-    fi
-    
-    # 方法4: 强制终止 (kill -9)
-    if check_frpc_status; then
-        print_info "尝试强制终止..."
-        # 获取 PID 并强制终止
+        print_info "尝试精确终止..."
         local pids=""
-        if command -v pgrep > /dev/null 2>&1; then
-            pids=$(pgrep -f "frpc" 2>/dev/null)
-        else
-            pids=$(ps | grep "frpc" | grep -v grep | awk '{print $1}')
+        # 使用 ps 找到精确的 frpc 进程（排除管理脚本）
+        pids=$(ps w 2>/dev/null | grep -E "[/]frpc( |$)" | grep -v "frpc-manager\|frpcm\|grep" | awk '{print $1}')
+        if [ -z "$pids" ]; then
+            pids=$(ps | grep "frpc" | grep -v "frpc-manager\|frpcm\|grep" | awk '{print $1}')
         fi
         
         for pid in $pids; do
-            kill -9 "$pid" 2>/dev/null
+            # 排除自己
+            if [ "$pid" != "$self_pid" ] && [ "$pid" != "$$" ]; then
+                kill -9 "$pid" 2>/dev/null
+            fi
         done
         sleep 1
     fi
