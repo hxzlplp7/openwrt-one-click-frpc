@@ -960,23 +960,73 @@ stop_frpc() {
     fi
     
     print_info "正在停止 FRPC..."
-    $FRPC_SERVICE stop 2>/dev/null
-    killall frpc 2>/dev/null
     
+    # 方法1: 使用服务脚本停止
+    if [ -f "$FRPC_SERVICE" ]; then
+        $FRPC_SERVICE stop 2>/dev/null
+    fi
+    
+    # 等待一下
     sleep 1
     
+    # 方法2: 使用 killall
+    if check_frpc_status; then
+        killall frpc 2>/dev/null
+        sleep 1
+    fi
+    
+    # 方法3: 使用 pkill
+    if check_frpc_status; then
+        if command -v pkill > /dev/null 2>&1; then
+            pkill -f "frpc" 2>/dev/null
+            sleep 1
+        fi
+    fi
+    
+    # 方法4: 强制终止 (kill -9)
+    if check_frpc_status; then
+        print_info "尝试强制终止..."
+        # 获取 PID 并强制终止
+        local pids=""
+        if command -v pgrep > /dev/null 2>&1; then
+            pids=$(pgrep -f "frpc" 2>/dev/null)
+        else
+            pids=$(ps | grep "frpc" | grep -v grep | awk '{print $1}')
+        fi
+        
+        for pid in $pids; do
+            kill -9 "$pid" 2>/dev/null
+        done
+        sleep 1
+    fi
+    
+    # 最终检查
     if ! check_frpc_status; then
         print_success "FRPC 已停止"
+        return 0
     else
-        print_error "停止失败"
+        print_error "停止失败，请手动终止进程"
+        # 显示进程信息
+        ps | grep frpc | grep -v grep
+        return 1
     fi
 }
 
 # 重启 frpc
 restart_frpc() {
     print_info "正在重启 FRPC..."
-    stop_frpc
+    
+    # 先尝试停止（忽略返回值）
+    if check_frpc_status; then
+        stop_frpc
+        sleep 2
+    fi
+    
+    # 确保没有残留进程
+    killall frpc 2>/dev/null
     sleep 1
+    
+    # 启动
     start_frpc
 }
 
