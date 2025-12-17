@@ -921,6 +921,16 @@ start_frpc() {
         return 1
     fi
     
+    # 验证配置文件
+    print_info "验证配置文件..."
+    local verify_result=$($FRPC_BIN verify -c "$FRPC_CONFIG" 2>&1)
+    if echo "$verify_result" | grep -qi "error\|fail"; then
+        print_error "配置文件有误:"
+        echo "$verify_result" | head -5
+        print_info "请编辑配置文件 (选项 5) 或重新配置 (选项 4)"
+        return 1
+    fi
+    
     if check_frpc_status; then
         print_warning "FRPC 已在运行中"
         return 0
@@ -1083,11 +1093,17 @@ show_status() {
     echo -n "运行状态: "
     if check_frpc_status; then
         echo -e "${GREEN}运行中${NC}"
-        local pid=$(pgrep -x frpc)
-        echo -e "进程 PID: ${CYAN}${pid}${NC}"
+        # 获取 PID
+        local pid=""
+        if command -v pgrep > /dev/null 2>&1; then
+            pid=$(pgrep -f "frpc" | head -1)
+        else
+            pid=$(ps | grep "frpc" | grep -v grep | awk '{print $1}' | head -1)
+        fi
+        [ -n "$pid" ] && echo -e "进程 PID: ${CYAN}${pid}${NC}"
         
         # 内存使用
-        if [ -n "$pid" ]; then
+        if [ -n "$pid" ] && [ -f "/proc/$pid/status" ]; then
             local mem=$(cat /proc/$pid/status 2>/dev/null | grep VmRSS | awk '{print $2}')
             [ -n "$mem" ] && echo -e "内存使用: ${CYAN}${mem} KB${NC}"
         fi
@@ -1100,7 +1116,16 @@ show_status() {
     if [ -f "$FRPC_CONFIG" ]; then
         local server=$(grep "serverAddr" "$FRPC_CONFIG" | cut -d'"' -f2)
         local port=$(grep "serverPort" "$FRPC_CONFIG" | awk '{print $3}')
-        echo -e "服务器地址: ${CYAN}${server}:${port}${NC}"
+        echo -e "FRPS服务器: ${CYAN}${server}:${port}${NC}"
+        
+        # 检查连接状态（从日志）
+        if [ -f "$FRPC_LOG" ]; then
+            if tail -20 "$FRPC_LOG" 2>/dev/null | grep -q "login to server success"; then
+                echo -e "连接状态: ${GREEN}已连接${NC}"
+            elif tail -20 "$FRPC_LOG" 2>/dev/null | grep -q "connection refused\|connect.*error"; then
+                echo -e "连接状态: ${RED}连接失败${NC}"
+            fi
+        fi
     fi
     
     # 开机自启状态
@@ -1115,6 +1140,49 @@ show_status() {
     if [ -f "$FRPC_CONFIG" ]; then
         local proxy_count=$(grep -c "\[\[proxies\]\]" "$FRPC_CONFIG")
         echo -e "代理规则: ${CYAN}${proxy_count} 条${NC}"
+    fi
+    
+    # Web 管理面板状态
+    echo ""
+    echo -e "${CYAN}--- Web 管理面板 ---${NC}"
+    local router_ip=""
+    # 尝试获取路由器 LAN IP
+    if command -v uci > /dev/null 2>&1; then
+        router_ip=$(uci get network.lan.ipaddr 2>/dev/null)
+    fi
+    if [ -z "$router_ip" ]; then
+        router_ip=$(ip addr show br-lan 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
+    fi
+    if [ -z "$router_ip" ]; then
+        router_ip="路由器IP"
+    fi
+    
+    echo -e "访问地址: ${CYAN}http://${router_ip}:7400${NC}"
+    echo -e "用户名/密码: ${CYAN}admin / admin${NC}"
+    
+    # 检测 7400 端口是否在监听
+    if netstat -tlnp 2>/dev/null | grep -q ":7400"; then
+        echo -e "端口状态: ${GREEN}7400 端口已开放${NC}"
+    elif ss -tlnp 2>/dev/null | grep -q ":7400"; then
+        echo -e "端口状态: ${GREEN}7400 端口已开放${NC}"
+    else
+        echo -e "端口状态: ${RED}7400 端口未监听${NC}"
+        echo -e "${YELLOW}提示: FRPC 可能未正确启动，请检查日志${NC}"
+    fi
+    
+    # 检查防火墙
+    if command -v uci > /dev/null 2>&1; then
+        if ! uci show firewall 2>/dev/null | grep -q "7400"; then
+            echo ""
+            echo -e "${YELLOW}提示: 如果无法访问面板，可能需要在防火墙开放 7400 端口${NC}"
+            echo -e "${YELLOW}运行: uci add firewall rule${NC}"
+            echo -e "${YELLOW}      uci set firewall.@rule[-1].name='Allow-FRPC-Web'${NC}"
+            echo -e "${YELLOW}      uci set firewall.@rule[-1].src='lan'${NC}"
+            echo -e "${YELLOW}      uci set firewall.@rule[-1].dest_port='7400'${NC}"
+            echo -e "${YELLOW}      uci set firewall.@rule[-1].proto='tcp'${NC}"
+            echo -e "${YELLOW}      uci set firewall.@rule[-1].target='ACCEPT'${NC}"
+            echo -e "${YELLOW}      uci commit firewall && /etc/init.d/firewall reload${NC}"
+        fi
     fi
 }
 
