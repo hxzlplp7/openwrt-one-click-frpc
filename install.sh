@@ -85,10 +85,11 @@ fi
 chmod +x "$INSTALL_PATH"
 echo -e "${GREEN}[✓] 脚本已安装到: $INSTALL_PATH${NC}"
 
-# 创建快捷命令
-if [ ! -L /usr/bin/frpc ]; then
-    # 避免与 frpc 二进制文件冲突
-    :
+# 创建快捷命令 frpcm
+SHORTCUT_PATH="/usr/bin/frpcm"
+if [ ! -L "$SHORTCUT_PATH" ] && [ ! -f "$SHORTCUT_PATH" ]; then
+    ln -sf "$INSTALL_PATH" "$SHORTCUT_PATH"
+    echo -e "${GREEN}[✓] 快捷命令已创建: frpcm${NC}"
 fi
 
 echo ""
@@ -97,13 +98,14 @@ echo -e "${GREEN}║              安装完成!                            ║${
 echo -e "${GREEN}╚═══════════════════════════════════════════════════╝${NC}"
 echo ""
 echo "使用方法:"
+echo "  frpcm                 # 进入交互式菜单 (快捷命令)"
 echo "  frpc-manager          # 进入交互式菜单"
 echo "  frpc-manager start    # 启动 FRPC"
 echo "  frpc-manager stop     # 停止 FRPC"
 echo "  frpc-manager status   # 查看状态"
 echo "  frpc-manager help     # 显示帮助"
 echo ""
-echo -e "${CYAN}运行 'frpc-manager' 开始配置${NC}"
+echo -e "${CYAN}运行 'frpcm' 或 'frpc-manager' 开始配置${NC}"
 echo ""
 
 # 询问是否立即运行

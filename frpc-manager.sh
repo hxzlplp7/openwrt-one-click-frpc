@@ -3,7 +3,7 @@
 # OpenWrt/iStoreOS FRPC 一键管理脚本
 # 用于反向代理到 FRPS 服务器
 # Author: AI Assistant
-# Version: 1.0.0
+# Version: 1.0.1
 # =========================================================
 
 # 颜色定义
@@ -22,9 +22,27 @@ FRPC_CONFIG="${FRPC_DIR}/frpc.toml"
 FRPC_BIN="/usr/bin/frpc"
 FRPC_SERVICE="/etc/init.d/frpc"
 FRPC_LOG="/var/log/frpc.log"
+FRPC_MANAGER="/usr/bin/frpc-manager"
+FRPC_SHORTCUT="/usr/bin/frpcm"
 
 # FRPC 版本
 FRPC_VERSION="0.61.1"
+
+# 安装快捷命令
+install_shortcut() {
+    local script_path=$(readlink -f "$0" 2>/dev/null || echo "$0")
+    
+    # 如果脚本不在 /usr/bin，复制过去
+    if [ "$script_path" != "$FRPC_MANAGER" ]; then
+        cp "$script_path" "$FRPC_MANAGER" 2>/dev/null
+        chmod +x "$FRPC_MANAGER" 2>/dev/null
+    fi
+    
+    # 创建 frpcm 快捷命令
+    if [ ! -L "$FRPC_SHORTCUT" ] && [ ! -f "$FRPC_SHORTCUT" ]; then
+        ln -sf "$FRPC_MANAGER" "$FRPC_SHORTCUT" 2>/dev/null
+    fi
+}
 
 # 显示 Logo
 show_logo() {
@@ -1551,6 +1569,9 @@ main_menu() {
         read dummy
     done
 }
+
+# 首次运行时安装快捷命令
+install_shortcut
 
 # 命令行参数处理
 case "$1" in

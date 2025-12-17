@@ -50,21 +50,23 @@ chmod +x frpc-manager.sh
 直接运行脚本进入交互式菜单：
 
 ```bash
-./frpc-manager.sh
+frpcm              # 快捷命令
+# 或
+frpc-manager       # 完整命令
 ```
 
 ### 命令行模式
 
 ```bash
-./frpc-manager.sh start      # 启动 FRPC
-./frpc-manager.sh stop       # 停止 FRPC
-./frpc-manager.sh restart    # 重启 FRPC
-./frpc-manager.sh reload     # 重载配置
-./frpc-manager.sh status     # 查看状态
-./frpc-manager.sh log        # 查看日志
-./frpc-manager.sh install    # 安装 FRPC
-./frpc-manager.sh uninstall  # 卸载 FRPC
-./frpc-manager.sh help       # 显示帮助
+frpcm start      # 启动 FRPC
+frpcm stop       # 停止 FRPC
+frpcm restart    # 重启 FRPC
+frpcm reload     # 重载配置
+frpcm status     # 查看状态
+frpcm log        # 查看日志
+frpcm install    # 安装 FRPC
+frpcm uninstall  # 卸载 FRPC
+frpcm help       # 显示帮助
 ```
 
 ## 📋 快速开始
