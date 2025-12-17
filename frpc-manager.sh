@@ -1114,18 +1114,37 @@ show_status() {
     # 配置信息
     echo ""
     if [ -f "$FRPC_CONFIG" ]; then
-        local server=$(grep "serverAddr" "$FRPC_CONFIG" | cut -d'"' -f2)
-        local port=$(grep "serverPort" "$FRPC_CONFIG" | awk '{print $3}')
-        echo -e "FRPS服务器: ${CYAN}${server}:${port}${NC}"
+        # 更健壮的配置读取
+        local server=$(grep "^serverAddr" "$FRPC_CONFIG" | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1)
+        local port=$(grep "^serverPort" "$FRPC_CONFIG" | sed 's/.*= *//' | tr -d ' ' | head -1)
         
-        # 检查连接状态（从日志）
+        if [ -n "$server" ] && [ -n "$port" ]; then
+            echo -e "FRPS服务器: ${CYAN}${server}:${port}${NC}"
+        else
+            echo -e "FRPS服务器: ${RED}配置缺失或损坏${NC}"
+        fi
+        
+        # 检查连接状态（从日志或 logread）
+        local connected=0
         if [ -f "$FRPC_LOG" ]; then
             if tail -20 "$FRPC_LOG" 2>/dev/null | grep -q "login to server success"; then
-                echo -e "连接状态: ${GREEN}已连接${NC}"
-            elif tail -20 "$FRPC_LOG" 2>/dev/null | grep -q "connection refused\|connect.*error"; then
-                echo -e "连接状态: ${RED}连接失败${NC}"
+                connected=1
             fi
         fi
+        # 也从系统日志检查
+        if [ $connected -eq 0 ]; then
+            if logread 2>/dev/null | tail -50 | grep -q "login to server success"; then
+                connected=1
+            fi
+        fi
+        
+        if [ $connected -eq 1 ]; then
+            echo -e "连接状态: ${GREEN}已连接${NC}"
+        elif logread 2>/dev/null | tail -20 | grep -q "connection refused\|connect.*error"; then
+            echo -e "连接状态: ${RED}连接失败${NC}"
+        fi
+    else
+        echo -e "FRPS服务器: ${RED}配置文件不存在${NC}"
     fi
     
     # 开机自启状态
