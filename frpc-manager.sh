@@ -289,22 +289,40 @@ configure_server() {
     if [ -f "$FRPC_CONFIG" ]; then
         current_server=$(grep "serverAddr" "$FRPC_CONFIG" 2>/dev/null | cut -d'"' -f2)
         current_port=$(grep "serverPort" "$FRPC_CONFIG" 2>/dev/null | awk '{print $3}')
-        current_token=$(grep "auth.token" "$FRPC_CONFIG" 2>/dev/null | cut -d'"' -f2)
+        current_token=$(grep "token" "$FRPC_CONFIG" 2>/dev/null | head -1 | cut -d'"' -f2)
     fi
     
     # 输入服务器地址
-    if [ -n "$current_server" ]; then
-        echo -e "FRPS 服务器地址 [${GREEN}${current_server}${NC}]: \c"
-    else
-        echo -n "FRPS 服务器地址: "
-    fi
-    read server_addr
-    [ -z "$server_addr" ] && server_addr="$current_server"
-    
-    if [ -z "$server_addr" ]; then
-        print_error "服务器地址不能为空"
-        return 1
-    fi
+    while true; do
+        if [ -n "$current_server" ] && [ "$current_server" != "0.0.0.0" ]; then
+            echo -e "FRPS 服务器地址 [${GREEN}${current_server}${NC}]: \c"
+        else
+            echo -n "FRPS 服务器地址 (域名或IP): "
+        fi
+        read server_addr
+        
+        # 使用默认值
+        if [ -z "$server_addr" ] && [ -n "$current_server" ] && [ "$current_server" != "0.0.0.0" ]; then
+            server_addr="$current_server"
+        fi
+        
+        # 验证地址
+        if [ -z "$server_addr" ]; then
+            print_error "服务器地址不能为空"
+            continue
+        fi
+        
+        # 检查无效地址
+        case "$server_addr" in
+            "0.0.0.0"|"127.0.0.1"|"localhost"|"")
+                print_error "无效的服务器地址: $server_addr"
+                print_info "请输入 FRPS 服务器的公网IP或域名"
+                continue
+                ;;
+        esac
+        
+        break
+    done
     
     # 输入服务器端口
     if [ -n "$current_port" ]; then
@@ -315,6 +333,12 @@ configure_server() {
     read server_port
     [ -z "$server_port" ] && server_port="${current_port:-7000}"
     
+    # 验证端口
+    if ! echo "$server_port" | grep -qE '^[0-9]+$'; then
+        print_error "无效的端口号"
+        return 1
+    fi
+    
     # 输入认证令牌
     if [ -n "$current_token" ]; then
         echo -e "FRPS 认证令牌 [${GREEN}******${NC}]: \c"
@@ -324,13 +348,18 @@ configure_server() {
     read auth_token
     [ -z "$auth_token" ] && auth_token="$current_token"
     
+    if [ -z "$auth_token" ]; then
+        print_warning "未设置认证令牌，如果FRPS服务器需要认证可能无法连接"
+    fi
+    
     # 输入日志级别
     echo -n "日志级别 [info/debug/warning/error] (默认: info): "
     read log_level
     [ -z "$log_level" ] && log_level="info"
     
-    # 创建配置目录
+    # 创建配置目录和日志文件
     mkdir -p "$FRPC_DIR"
+    touch "$FRPC_LOG"
     
     # 保留现有的代理配置
     local proxies=""
@@ -347,6 +376,9 @@ configure_server() {
 serverAddr = "${server_addr}"
 serverPort = ${server_port}
 
+# 连接失败后自动重试，不退出
+loginFailExit = false
+
 [auth]
 method = "token"
 token = "${auth_token}"
@@ -355,6 +387,15 @@ token = "${auth_token}"
 to = "${FRPC_LOG}"
 level = "${log_level}"
 maxDays = 7
+
+# 传输配置
+[transport]
+# 心跳检测超时时间
+heartbeatTimeout = 90
+# 连接服务器超时时间
+dialServerTimeout = 10
+# 连接保活
+dialServerKeepAlive = 7200
 
 [webServer]
 addr = "0.0.0.0"
@@ -371,8 +412,28 @@ EOF
     
     print_success "服务器配置已保存!"
     echo ""
+    echo -e "${CYAN}服务器: ${server_addr}:${server_port}${NC}"
     echo -e "${YELLOW}Web管理界面: http://路由器IP:7400${NC}"
     echo -e "${YELLOW}默认用户名: admin / 密码: admin${NC}"
+    echo ""
+    
+    # 询问是否测试连接
+    echo -n "是否测试连接到服务器? [Y/n]: "
+    read test_conn
+    if [ "$test_conn" != "n" ] && [ "$test_conn" != "N" ]; then
+        print_info "正在测试连接..."
+        # 使用 nc 或 timeout + echo 测试端口
+        if command -v nc > /dev/null 2>&1; then
+            if nc -z -w 3 "$server_addr" "$server_port" 2>/dev/null; then
+                print_success "服务器 ${server_addr}:${server_port} 可达!"
+            else
+                print_warning "无法连接到 ${server_addr}:${server_port}"
+                print_info "请检查: 1) 服务器地址是否正确 2) FRPS 是否运行 3) 防火墙是否开放端口"
+            fi
+        else
+            print_info "跳过连接测试 (nc 命令不可用)"
+        fi
+    fi
 }
 
 # 添加代理规则
