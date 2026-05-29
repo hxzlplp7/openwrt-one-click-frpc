@@ -173,7 +173,11 @@ install_frpc() {
     
     # 下载
     if command -v wget > /dev/null 2>&1; then
-        wget -q --show-progress -O "${tmp_dir}/frpc.tar.gz" "$download_url"
+        if wget --help 2>&1 | grep -q "show-progress"; then
+            wget -q --show-progress -O "${tmp_dir}/frpc.tar.gz" "$download_url"
+        else
+            wget -q -O "${tmp_dir}/frpc.tar.gz" "$download_url"
+        fi
     elif command -v curl > /dev/null 2>&1; then
         curl -fsSL -o "${tmp_dir}/frpc.tar.gz" "$download_url"
     else
