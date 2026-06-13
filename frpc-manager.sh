@@ -380,6 +380,108 @@ configure_server() {
     read log_level
     [ -z "$log_level" ] && log_level="info"
     
+    # 读取现有传输协议配置
+    local current_protocol="tcp"
+    local current_tls="false"
+    if [ -f "$FRPC_CONFIG" ]; then
+        local tmp_proto=$(grep 'protocol' "$FRPC_CONFIG" 2>/dev/null | grep -v '^#' | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1)
+        [ -n "$tmp_proto" ] && current_protocol="$tmp_proto"
+        if grep -q 'enable = true' "$FRPC_CONFIG" 2>/dev/null; then
+            current_tls="true"
+        fi
+    fi
+    
+    # 选择传输协议
+    echo ""
+    echo -e "${CYAN}选择传输协议:${NC}"
+    echo "  1. TCP   (默认，直连模式)"
+    echo "  2. WebSocket   (可过 CDN，如 Cloudflare)"
+    echo "  3. WebSocket + TLS  (WSS 加密，推荐过 CDN)"
+    echo ""
+    
+    # 显示当前配置
+    local current_proto_display="TCP"
+    if [ "$current_protocol" = "websocket" ]; then
+        if [ "$current_tls" = "true" ]; then
+            current_proto_display="WebSocket + TLS (WSS)"
+        else
+            current_proto_display="WebSocket"
+        fi
+    fi
+    echo -e "当前: ${GREEN}${current_proto_display}${NC}"
+    echo -n "请选择 [1-3] (回车保持当前): "
+    read proto_choice
+    
+    local transport_protocol="tcp"
+    local tls_enable="false"
+    
+    case "$proto_choice" in
+        1)
+            transport_protocol="tcp"
+            tls_enable="false"
+            ;;
+        2)
+            transport_protocol="websocket"
+            tls_enable="false"
+            ;;
+        3)
+            transport_protocol="websocket"
+            tls_enable="true"
+            ;;
+        "")
+            # 保持当前配置
+            transport_protocol="$current_protocol"
+            tls_enable="$current_tls"
+            ;;
+        *)
+            print_warning "无效选择，使用默认 TCP"
+            transport_protocol="tcp"
+            tls_enable="false"
+            ;;
+    esac
+    
+    # WebSocket 模式下的端口提示
+    if [ "$transport_protocol" = "websocket" ]; then
+        echo ""
+        echo -e "${YELLOW}╔══════════════════════════════════════════════════╗${NC}"
+        echo -e "${YELLOW}║  WebSocket 模式 + Cloudflare CDN 注意事项:       ║${NC}"
+        echo -e "${YELLOW}║                                                  ║${NC}"
+        echo -e "${YELLOW}║  1. serverAddr 必须填域名（不能填 IP）            ║${NC}"
+        echo -e "${YELLOW}║  2. 服务器端口必须用 CF 支持的 HTTPS 端口:        ║${NC}"
+        echo -e "${YELLOW}║     443 / 2053 / 2083 / 2087 / 2096 / 8443       ║${NC}"
+        echo -e "${YELLOW}║  3. Cloudflare 后台需开启:                        ║${NC}"
+        echo -e "${YELLOW}║     - DNS 小黄云代理 (Proxied)                    ║${NC}"
+        echo -e "${YELLOW}║     - SSL/TLS 模式: Full 或 Full (Strict)         ║${NC}"
+        echo -e "${YELLOW}║     - Network > WebSockets: 开启                 ║${NC}"
+        echo -e "${YELLOW}╚══════════════════════════════════════════════════╝${NC}"
+        echo ""
+        
+        # 检查端口是否为 CF 支持的端口
+        case "$server_port" in
+            443|2053|2083|2087|2096|8443)
+                ;;
+            80|8080|8880|2052|2082|2086|2095)
+                print_warning "端口 ${server_port} 是 HTTP 端口，WSS 模式建议使用 HTTPS 端口 (443/8443)"
+                echo -n "是否改为 443? [Y/n]: "
+                read change_port
+                if [ "$change_port" != "n" ] && [ "$change_port" != "N" ]; then
+                    server_port="443"
+                    print_info "端口已改为 443"
+                fi
+                ;;
+            *)
+                print_warning "端口 ${server_port} 不在 Cloudflare CDN 支持列表中!"
+                print_info "如果不过 CDN 可忽略此提示"
+                echo -n "是否改为 443? [y/N]: "
+                read change_port
+                if [ "$change_port" = "y" ] || [ "$change_port" = "Y" ]; then
+                    server_port="443"
+                    print_info "端口已改为 443"
+                fi
+                ;;
+        esac
+    fi
+    
     # 创建配置目录和日志文件
     mkdir -p "$FRPC_DIR"
     touch "$FRPC_LOG"
@@ -413,10 +515,25 @@ maxDays = 7
 
 # Transport settings
 [transport]
+protocol = "${transport_protocol}"
 heartbeatTimeout = 90
 dialServerTimeout = 10
 dialServerKeepAlive = 7200
 
+EOF
+    
+    # 如果启用 TLS，追加 TLS 配置段
+    if [ "$tls_enable" = "true" ]; then
+        cat >> "$FRPC_CONFIG" << EOF
+# TLS 加密配置（WebSocket + TLS = WSS）
+[transport.tls]
+enable = true
+
+EOF
+    fi
+    
+    # 追加 Web 管理面板配置
+    cat >> "$FRPC_CONFIG" << EOF
 [webServer]
 addr = "0.0.0.0"
 port = 7400
@@ -433,6 +550,16 @@ EOF
     print_success "服务器配置已保存!"
     echo ""
     echo -e "${CYAN}服务器: ${server_addr}:${server_port}${NC}"
+    
+    # 显示传输协议信息
+    if [ "$transport_protocol" = "websocket" ] && [ "$tls_enable" = "true" ]; then
+        echo -e "${CYAN}传输协议: WebSocket + TLS (WSS 加密)${NC}"
+    elif [ "$transport_protocol" = "websocket" ]; then
+        echo -e "${CYAN}传输协议: WebSocket${NC}"
+    else
+        echo -e "${CYAN}传输协议: TCP (默认)${NC}"
+    fi
+    
     echo -e "${YELLOW}Web管理界面: http://路由器IP:7400${NC}"
     echo -e "${YELLOW}默认用户名: admin / 密码: admin${NC}"
     echo ""
@@ -1142,6 +1269,17 @@ show_status() {
             echo -e "FRPS服务器: ${CYAN}${server}:${port}${NC}"
         else
             echo -e "FRPS服务器: ${RED}配置缺失或损坏${NC}"
+        fi
+        
+        # 显示传输协议
+        local protocol=$(grep 'protocol' "$FRPC_CONFIG" 2>/dev/null | grep -v '^#' | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1)
+        local tls_on=$(grep 'enable = true' "$FRPC_CONFIG" 2>/dev/null | head -1)
+        if [ "$protocol" = "websocket" ] && [ -n "$tls_on" ]; then
+            echo -e "传输协议: ${GREEN}WebSocket + TLS (WSS 加密)${NC}"
+        elif [ "$protocol" = "websocket" ]; then
+            echo -e "传输协议: ${YELLOW}WebSocket${NC}"
+        else
+            echo -e "传输协议: ${CYAN}TCP (默认)${NC}"
         fi
         
         # 检查连接状态（从日志或 logread）
