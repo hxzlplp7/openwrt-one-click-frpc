@@ -380,6 +380,23 @@ configure_server() {
     read log_level
     [ -z "$log_level" ] && log_level="info"
     
+    # 读取现有 DNS 配置
+    local current_dns=""
+    if [ -f "$FRPC_CONFIG" ]; then
+        current_dns=$(grep "^dnsServer" "$FRPC_CONFIG" 2>/dev/null | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1)
+    fi
+    
+    # 输入 DNS 服务器
+    echo ""
+    echo -e "${CYAN}自定义 DNS 解析服务器（可选，用于规避 Clash 等 Fake-IP 模式导致的解析环路问题）:${NC}"
+    if [ -n "$current_dns" ]; then
+        echo -e "DNS 服务器 [${GREEN}${current_dns}${NC}]: \c"
+    else
+        echo -n "DNS 服务器 (例如 223.5.5.5，回车跳过): "
+    fi
+    read dns_server
+    [ -z "$dns_server" ] && dns_server="$current_dns"
+    
     # 读取现有传输协议配置
     local current_protocol="tcp"
     local current_tls="false"
@@ -500,6 +517,16 @@ configure_server() {
 
 serverAddr = "${server_addr}"
 serverPort = ${server_port}
+EOF
+
+    # 如果配置了 dnsServer，写入配置中
+    if [ -n "$dns_server" ]; then
+        cat >> "$FRPC_CONFIG" << EOF
+dnsServer = "${dns_server}"
+EOF
+    fi
+
+    cat >> "$FRPC_CONFIG" << EOF
 
 # Auto retry on connection failure
 loginFailExit = false
@@ -550,6 +577,11 @@ EOF
     print_success "服务器配置已保存!"
     echo ""
     echo -e "${CYAN}服务器: ${server_addr}:${server_port}${NC}"
+    
+    # 显示 DNS 服务器
+    if [ -n "$dns_server" ]; then
+        echo -e "${CYAN}DNS 服务器: ${dns_server} (自定义解析，避开 Fake-IP)${NC}"
+    fi
     
     # 显示传输协议信息
     if [ "$transport_protocol" = "websocket" ] && [ "$tls_enable" = "true" ]; then
@@ -1269,6 +1301,12 @@ show_status() {
             echo -e "FRPS服务器: ${CYAN}${server}:${port}${NC}"
         else
             echo -e "FRPS服务器: ${RED}配置缺失或损坏${NC}"
+        fi
+        
+        # 显示 DNS 服务器
+        local dns_srv=$(grep "^dnsServer" "$FRPC_CONFIG" 2>/dev/null | sed 's/.*= *"\([^"]*\)".*/\1/' | head -1)
+        if [ -n "$dns_srv" ]; then
+            echo -e "DNS 服务器: ${CYAN}${dns_srv}${NC} (自定义解析，避开 Fake-IP)"
         fi
         
         # 显示传输协议
